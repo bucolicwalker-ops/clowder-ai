@@ -758,10 +758,14 @@ final-generation card 与 mapper-only canonical subject 均有真实 route fixtu
   user/cat/thread 与 exact `cliSessionId`。callback auth/readiness 未就绪时显式
   `hook_authentication_unavailable`，不得继续读取并不存在的 compression sequence。*
   这里的 live-ready 不是启动期布尔值，而是同一 invocation coordinate 上三段证据的合取：全局
-  callback registry 已完成 recovery、当前 Claude `workingProjectRoot` 存在可执行的 project-local
-  PreCompact carrier，且该 invocation 的 authenticated `/api/sessions/seal` 已把本次 compression
-  observation 原子写进 active `SessionRecord`。前两项只证明“能够尝试”；只有第三项证明这次 hook
-  实际成功。runtime `/ready` 只能证明第一项，旧 session sequence 也不能替当前 invocation 作证。
+  callback registry 已完成 recovery、本次 invocation 的 spawn plan 携带 exact injected launch
+  carrier（#1542：harness 在 Claude spawn 时经单会话 `--settings` 注入 canonical Node carrier，
+  readiness 校验同一份 plan——不再扫描推测的 project root，仓内子目录 CWD 与 #1515 外部项目零写入
+  场景同样覆盖），且该 invocation 的 authenticated `/api/sessions/seal` 已把本次 compression
+  observation 原子写进 active `SessionRecord`（#1542 guard 4：seal 在计数前校验与 launch plan 绑定的
+  carrier identity，legacy shell 与 canonical Node 并发只形成一个 logical observation）。前两项只
+  证明“能够尝试”；只有第三项证明这次 hook 实际成功。runtime `/ready` 只能证明第一项，旧 session
+  sequence 也不能替当前 invocation 作证。
   provider-loop 按下表 fail closed：
 
   | callback registry | active workspace PreCompact carrier | current-invocation seal observation | typed `compact_boundary` | authority result |
