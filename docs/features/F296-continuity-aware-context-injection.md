@@ -8,7 +8,7 @@ description: "按真实 runtime continuity 区分冷启动与热续，并让上�
 description_source: human
 description_author: codex-sol
 description_updated_at: 2026-08-31T16:45:00-07:00
-tips_exempt: "续租 2026-08-28 / PR #4040：AgentRouter authority 接线、rerun-safe provider trigger 选择与 Compact turn settlement 只修复既有生产/Alpha 可靠性接缝；不新增用户可操作入口。"
+tips_exempt: "续租 2026-09-28 / PR #1543：spawn-time --settings 注入与 launch-plan readiness 只修复 #1542 的 carrier 契约真相源（AC-B8 措辞同步），不新增用户可操作入口。"
 ---
 
 # F296: Continuity-Aware Context Injection — 冷启动可信定向包 + 热续增量
@@ -768,7 +768,7 @@ final-generation card 与 mapper-only canonical subject 均有真实 route fixtu
   sequence 也不能替当前 invocation 作证。
   provider-loop 按下表 fail closed：
 
-  | callback registry | active workspace PreCompact carrier | current-invocation seal observation | typed `compact_boundary` | authority result |
+  | callback registry | exact injected launch-plan carrier（#1542） | current-invocation seal observation | typed `compact_boundary` | authority result |
   |---|---|---|---|---|
   | unavailable | any | any | present | `unsupported:hook_authentication_unavailable`；不读取 session sequence |
   | ready | absent / invalid | any | present | `unsupported:hook_carrier_unavailable`；不读取 session sequence |
