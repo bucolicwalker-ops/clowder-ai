@@ -13,6 +13,7 @@
 
 import type { FastifyInstance, FastifyPluginOptions, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import { expectedCompactionCarrierFor } from '../domains/cats/services/session/compaction-carrier-identity.js';
 import type { ISessionSealer } from '../domains/cats/services/session/SessionSealer.js';
 import type { TranscriptReader } from '../domains/cats/services/session/TranscriptReader.js';
 import type { ISessionChainStore } from '../domains/cats/services/stores/ports/SessionChainStore.js';
@@ -48,6 +49,11 @@ function cliSessionIdFromHookRequest(request: FastifyRequest): string | undefine
     request.query && typeof request.query === 'object' ? (request.query as Record<string, unknown>) : undefined;
   if (typeof body?.cliSessionId === 'string') return body.cliSessionId;
   return typeof query?.cliSessionId === 'string' ? query.cliSessionId : undefined;
+}
+
+function firstHeader(value: string | string[] | undefined): string | undefined {
+  if (typeof value === 'string') return value || undefined;
+  return Array.isArray(value) ? value[0] || undefined : undefined;
 }
 
 function invocationOwnsSession(
@@ -86,6 +92,18 @@ export async function sessionHooksRoutes(app: FastifyInstance, opts: SessionHook
   app.post('/api/sessions/seal', async (request, reply) => {
     const invocation = requireCallbackAuth(request, reply);
     if (!invocation) return;
+    // #1542 guard 4: when this invocation launched a managed carrier plan, only
+    // that carrier's identity may mint the compression observation — a legacy
+    // shell hook firing alongside the canonical Node carrier must never produce
+    // a second logical observation. Checked BEFORE recordCompressionEvent.
+    const expectedCarrier = expectedCompactionCarrierFor(invocation.invocationId);
+    if (expectedCarrier !== undefined) {
+      const presented = firstHeader(request.headers['x-clowder-compaction-carrier']);
+      if (presented !== expectedCarrier) {
+        reply.status(403);
+        return { error: 'compaction_carrier_identity_mismatch' };
+      }
+    }
     const parseResult = sealSchema.safeParse(request.body);
     if (!parseResult.success) {
       reply.status(400);

@@ -122,6 +122,7 @@ import {
   authoritativeCompactionEventFromSession,
   resolveAuthoritativeCompactionSupport,
 } from '../../session/authoritative-compaction.js';
+import { bindInvocationCompactionCarrier } from '../../session/compaction-carrier-identity.js';
 import {
   ledgerOutcomeFromCommits,
   recordContextProjectionDeliveryLatency,
@@ -133,6 +134,7 @@ import {
   encodeMemoryCueSourceRef,
 } from '../../session/request-generation-source-policy.js';
 import { resolveDefaultClaudeMcpServerPath } from '../providers/ClaudeAgentService.js';
+import { buildClaudeCompactionLaunchPlan } from '../providers/claude-compaction-launch-plan.js';
 import { extractUserEnvTemplates, hasSupportedEnvTemplate, resolveEnvMap } from '../providers/env-map.js';
 import { compileL0ViaSubprocess } from '../providers/l0-compiler.js';
 import { OC_INSTRUCTIONS_ONLY_ENV } from '../providers/OpenCodeAgentService.js';
@@ -1094,8 +1096,6 @@ export interface InvocationDeps {
   readonly contextEpochOwner?: Pick<ContextEpochOwner, 'resolve' | 'observeCompaction' | 'confirmColdConsumed'>;
   /** Live project-hook auth readiness required before Claude can own a compaction sequence. */
   readonly hookAuthenticationReady?: boolean | (() => boolean);
-  /** Active-workspace PreCompact carrier readiness; independent from callback registry recovery. */
-  readonly claudeProjectHookCarrierReady?: boolean | ((projectRoot: string) => boolean);
   /** F296 B3b-2: shared admission/delivery state machine for dynamic prompt projections. */
   readonly presentationLedger?: Pick<PresentationLedger, 'reserve' | 'commit' | 'release'>;
   /** F276 Wave 2 bridge: cross-invocation terminal truth consulted at opportunity admission. */
@@ -3729,9 +3729,21 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
     const entrustedWorkSourceMessageId = params.a2aTriggerMessageId ?? params.executionCausal?.triggerMessageId;
     const entrustedWorkTaskStore = deps.taskStore;
 
+    // #1542: build the managed compaction launch plan once. The SAME plan is
+    // handed to the carrier (which derives the single `--settings` injection)
+    // and consumed at the compaction boundary as carrier-readiness evidence —
+    // readiness proves the exact carrier this invocation will launch, never a
+    // guessed project root. Assets resolve from the API install root, so this
+    // works for thread-workspace cwds and zero-write external projects alike.
+    const compactionLaunchPlan = provider === 'anthropic' ? buildClaudeCompactionLaunchPlan() : undefined;
+    if (compactionLaunchPlan?.ready) {
+      bindInvocationCompactionCarrier(invocationId, compactionLaunchPlan.carrierIdentity);
+    }
+
     const baseOptions: AgentServiceOptions = {
       ...(params.routeIntent ? { routeIntent: params.routeIntent } : {}),
       callbackEnv,
+      ...(compactionLaunchPlan ? { compactionLaunchPlan } : {}),
       ...(invocationCapacitySnapshot
         ? {
             contextCapacity: invocationCapacitySnapshot.capacity,
@@ -5343,10 +5355,11 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
             typeof deps.hookAuthenticationReady === 'function'
               ? deps.hookAuthenticationReady()
               : (deps.hookAuthenticationReady ?? false);
-          const hookCarrierReady =
-            typeof deps.claudeProjectHookCarrierReady === 'function'
-              ? deps.claudeProjectHookCarrierReady(workingProjectRoot ?? hostProjectRoot)
-              : (deps.claudeProjectHookCarrierReady ?? false);
+          // #1542: carrier readiness is the launch plan actually handed to this
+          // invocation's spawn — configuration presence elsewhere can no longer
+          // masquerade as a live carrier. This still cannot substitute for the
+          // current-invocation authenticated attestation checked below.
+          const hookCarrierReady = compactionLaunchPlan?.ready === true;
           // Ask the state machine with no attestation first. Only its specific
           // "attestation unavailable" edge authorizes the session read below;
           // auth/carrier/capability failures stop before sequence state.
