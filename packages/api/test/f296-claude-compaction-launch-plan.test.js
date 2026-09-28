@@ -87,6 +87,39 @@ describe('F296 #1542 claude compaction launch plan', () => {
     );
   });
 
+  test('install root is anchored to the module location, not the process CWD (#1542 P1-2)', () => {
+    // The committed carrier asset lives at the repo install root; the compiled
+    // module is anchored under it. From an unrelated CWD the plan must still
+    // resolve — proving the trusted-anchor contract.
+    const previousCwd = process.cwd();
+    const elsewhere = emptyRoot();
+    process.chdir(elsewhere);
+    try {
+      const plan = buildClaudeCompactionLaunchPlan();
+      assert.equal(plan.ready, true, 'module-anchored resolution must survive an unrelated CWD');
+      assert.ok(!plan.carrierScriptPath.startsWith(elsewhere), 'must not resolve from the stray CWD');
+    } finally {
+      process.chdir(previousCwd);
+    }
+  });
+
+  test('a relative user --settings path resolves against the spawn workingDirectory (#1542 P1-3)', () => {
+    const plan = buildClaudeCompactionLaunchPlan({ installRoot: carrierRoot() });
+    const workspace = emptyRoot();
+    writeFileSync(join(workspace, 'user-settings.json'), JSON.stringify({ env: { RELATIVE: 'ok' } }));
+
+    const merged = JSON.parse(composeManagedSettingsDocument(plan, 'user-settings.json', workspace));
+    assert.equal(merged.env.RELATIVE, 'ok', 'relative path must resolve from the spawn cwd, not the API cwd');
+    assert.equal(merged.hooks.PreCompact[0].hooks[0].command, plan.preCompactCommand);
+
+    const missingDir = emptyRoot();
+    assert.throws(
+      () => composeManagedSettingsDocument(plan, 'user-settings.json', missingDir),
+      /cli_config_args_settings_invalid/,
+      'a relative path absent from the spawn cwd must fail closed',
+    );
+  });
+
   test('composeManagedSettingsDocument preserves user settings and appends managed handlers', () => {
     const plan = buildClaudeCompactionLaunchPlan({ installRoot: carrierRoot() });
     assert.equal(composeManagedSettingsDocument(plan), plan.settingsDocument);

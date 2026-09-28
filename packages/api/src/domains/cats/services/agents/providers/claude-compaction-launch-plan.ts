@@ -18,8 +18,9 @@
  *   cannot substitute for the current-invocation authenticated attestation.
  */
 import { createHash } from 'node:crypto';
-import { lstatSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export const CLAUDE_COMPACTION_CARRIER_IDENTITY = 'f296-node-v1';
 
@@ -57,11 +58,36 @@ export interface ClaudeCompactionLaunchPlanOptions {
   readonly installRoot?: string;
 }
 
+/**
+ * Trusted install-root anchor (#1542 review P1-2): derive candidate roots from
+ * THIS MODULE's own location, never from process.cwd(). The packaged API may be
+ * launched from any directory (Windows Apps/apps spellings, junctions, service
+ * managers); the compiled module always lives at a fixed depth under the
+ * install root, so walking up from `import.meta.url` establishes the promised
+ * install-root authority boundary regardless of the process CWD.
+ */
+function resolveInstallRootCandidates(): string[] {
+  const moduleDir = dirname(fileURLToPath(import.meta.url));
+  // dist/domains/cats/services/agents/providers/ → walk up to the package root
+  // and the install root that contains it (repo checkout, desktop {app}, etc.).
+  return [
+    resolve(moduleDir, '.'), // packages/api/dist/.../providers (dev transpile layouts)
+    resolve(moduleDir, '../../../..'), // package root
+    resolve(moduleDir, '../../../../../..'), // install root containing the package
+  ];
+}
+
 function resolveInstallRoot(explicit?: string): string {
   if (explicit) return explicit;
   const envRoot = process.env.CAT_CAFE_COMPACTION_CARRIER_ROOT?.trim();
   if (envRoot) return envRoot;
-  return process.cwd();
+  for (const candidate of resolveInstallRootCandidates()) {
+    if (existsSync(join(candidate, '.claude', 'hooks', CARRIER_SCRIPT_NAME))) return candidate;
+  }
+  // Fall back to the nearest package-level ancestor; buildClaudeCompactionLaunchPlan
+  // still scans its upward candidates, so an unmatched root yields a ready:false
+  // plan rather than a wrong-file match.
+  return resolve(dirname(fileURLToPath(import.meta.url)), '../../../../../..');
 }
 
 function isRecordLike(value: unknown): value is Record<string, unknown> {
@@ -99,12 +125,22 @@ function managedSessionStartHookEntry(
  * with the managed handlers into ONE document: user settings survive verbatim
  * (including `disableAllHooks: true`, which keeps its fail-closed semantics),
  * and the managed PreCompact/SessionStart entries are appended.
+ *
+ * P1-3 (#1542 re-review): a RELATIVE file path keeps its CLI meaning — the
+ * claude child resolves it against the spawn workingDirectory, so this side
+ * must resolve it against the same directory, never the API process CWD.
  */
-export function composeManagedSettingsDocument(plan: ClaudeCompactionLaunchPlan, userSettings?: string): string {
+export function composeManagedSettingsDocument(
+  plan: ClaudeCompactionLaunchPlan,
+  userSettings?: string,
+  workingDirectory?: string,
+): string {
   if (userSettings === undefined) return plan.settingsDocument;
   let userDoc: Record<string, unknown>;
   try {
-    const raw = userSettings.trimStart().startsWith('{') ? userSettings : readFileSync(userSettings, 'utf8');
+    const raw = userSettings.trimStart().startsWith('{')
+      ? userSettings
+      : readFileSync(resolveUserSettingsPath(userSettings, workingDirectory), 'utf8');
     const parsed: unknown = JSON.parse(raw);
     if (!isRecordLike(parsed)) throw new Error('not_an_object');
     userDoc = parsed;
@@ -121,6 +157,12 @@ export function composeManagedSettingsDocument(plan: ClaudeCompactionLaunchPlan,
     },
   };
   return `${JSON.stringify(merged, null, 2)}\n`;
+}
+
+function resolveUserSettingsPath(userSettings: string, workingDirectory?: string): string {
+  if (isAbsolute(userSettings)) return userSettings;
+  // Mirror the CLI: relative --settings paths resolve from the child's cwd.
+  return resolve(workingDirectory ?? process.cwd(), userSettings);
 }
 
 function resolveCarrierScriptCandidates(installRoot: string): string[] {

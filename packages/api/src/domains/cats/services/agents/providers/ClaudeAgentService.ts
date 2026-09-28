@@ -699,7 +699,7 @@ export class ClaudeAgentService implements AgentService {
       const compactionPlan = options?.compactionLaunchPlan;
       if (compactionPlan?.ready) {
         preCompactSettingsPath = writePreCompactSettingsToTempFile(
-          composeManagedSettingsDocument(compactionPlan, userSettingsValue),
+          composeManagedSettingsDocument(compactionPlan, userSettingsValue, options?.workingDirectory),
         );
         args.push('--settings', preCompactSettingsPath);
       } else if (userSettingsValue !== undefined) {
