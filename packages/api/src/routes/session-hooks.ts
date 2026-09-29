@@ -13,7 +13,6 @@
 
 import type { FastifyInstance, FastifyPluginOptions, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { expectedCompactionCarrierFor } from '../domains/cats/services/session/compaction-carrier-identity.js';
 import type { ISessionSealer } from '../domains/cats/services/session/SessionSealer.js';
 import type { TranscriptReader } from '../domains/cats/services/session/TranscriptReader.js';
 import type { ISessionChainStore } from '../domains/cats/services/stores/ports/SessionChainStore.js';
@@ -95,8 +94,9 @@ export async function sessionHooksRoutes(app: FastifyInstance, opts: SessionHook
     // #1542 guard 4: when this invocation launched a managed carrier plan, only
     // that carrier's identity may mint the compression observation — a legacy
     // shell hook firing alongside the canonical Node carrier must never produce
-    // a second logical observation. Checked BEFORE recordCompressionEvent.
-    const expectedCarrier = expectedCompactionCarrierFor(invocation.invocationId);
+    // a second logical observation. Checked BEFORE recordCompressionEvent. The
+    // expectation is durable on the callback principal (survives restarts).
+    const expectedCarrier = invocation.expectedCompactionCarrier;
     if (expectedCarrier !== undefined) {
       const presented = firstHeader(request.headers['x-clowder-compaction-carrier']);
       if (presented !== expectedCarrier) {

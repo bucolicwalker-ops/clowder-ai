@@ -122,7 +122,6 @@ import {
   authoritativeCompactionEventFromSession,
   resolveAuthoritativeCompactionSupport,
 } from '../../session/authoritative-compaction.js';
-import { bindInvocationCompactionCarrier } from '../../session/compaction-carrier-identity.js';
 import {
   ledgerOutcomeFromCommits,
   recordContextProjectionDeliveryLatency,
@@ -3736,8 +3735,10 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
     // guessed project root. Assets resolve from the API install root, so this
     // works for thread-workspace cwds and zero-write external projects alike.
     const compactionLaunchPlan = provider === 'anthropic' ? buildClaudeCompactionLaunchPlan() : undefined;
-    if (compactionLaunchPlan?.ready) {
-      bindInvocationCompactionCarrier(invocationId, compactionLaunchPlan.carrierIdentity);
+    if (compactionLaunchPlan?.ready && typeof deps.registry.setExpectedCompactionCarrier === 'function') {
+      // #1542 guard 4: bind the carrier identity to the DURABLE callback
+      // principal — survives API restarts and never evicts live authority.
+      await deps.registry.setExpectedCompactionCarrier(invocationId, compactionLaunchPlan.carrierIdentity);
     }
 
     const baseOptions: AgentServiceOptions = {
