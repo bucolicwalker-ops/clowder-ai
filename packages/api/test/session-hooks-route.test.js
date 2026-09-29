@@ -1284,7 +1284,7 @@ describe('Session Hooks Routes', () => {
       assert.equal(JSON.parse(res.payload).status, 'sealing');
     });
 
-    it('Node + legacy firing in parallel produce exactly one logical observation (#1542 P1-5)', async () => {
+    it('Node + legacy racing behind one barrier produce exactly one logical observation (#1542 P1-5)', async () => {
       const { app, sessionChainStore } = await setup({ expectedCarrier: 'f296-node-v1' });
       const record = sessionChainStore.create({
         cliSessionId: 'cli-parallel',
@@ -1293,25 +1293,67 @@ describe('Session Hooks Routes', () => {
         userId: 'user-1',
       });
       applyPolicy(sessionChainStore, record, handoffPolicy);
+      const sealRequest = (headers) =>
+        app.inject({
+          method: 'POST',
+          url: '/api/sessions/seal',
+          headers,
+          payload: { cliSessionId: 'cli-parallel', reason: 'claude-code-compact-auto' },
+        });
 
-      // Canonical Node carrier fires with its typed identity → records once.
-      const nodeSeal = await app.inject({
-        method: 'POST',
-        url: '/api/sessions/seal',
-        headers: { ...authHeaders(), 'x-clowder-compaction-carrier': 'f296-node-v1' },
-        payload: { cliSessionId: 'cli-parallel', reason: 'claude-code-compact-auto' },
+      // True race: both callbacks are in flight simultaneously — no arrival
+      // order is imposed by the test.
+      const [nodeRes, legacyRes] = await Promise.all([
+        sealRequest({ ...authHeaders(), 'x-clowder-compaction-carrier': 'f296-node-v1' }),
+        sealRequest(authHeaders()),
+      ]);
+
+      assert.equal(nodeRes.statusCode, 200, 'the canonical Node carrier records its observation');
+      assert.equal(
+        legacyRes.statusCode,
+        403,
+        'legacy is rejected at the identity boundary — never by incidental session state',
+      );
+      assert.equal(JSON.parse(legacyRes.payload).error, 'compaction_carrier_identity_mismatch');
+      const after = sessionChainStore.get(record.id);
+      assert.ok(after.compressionObservation, 'the surviving observation is the authenticated one');
+      assert.equal(
+        after.compressionObservation.sequence,
+        1,
+        'exactly one logical observation — a second record would advance the sequence',
+      );
+      assert.equal(after.compressionObservation.invocationId, DEFAULT_CALLBACK_AUTH.invocationId);
+    });
+
+    it('legacy arriving BEFORE the Node carrier is still fenced at the identity boundary (#1542 P1-5)', async () => {
+      const { app, sessionChainStore } = await setup({ expectedCarrier: 'f296-node-v1' });
+      const record = sessionChainStore.create({
+        cliSessionId: 'cli-parallel-legacy-first',
+        threadId: 'thread-1',
+        catId: 'opus',
+        userId: 'user-1',
       });
-      assert.equal(nodeSeal.statusCode, 200);
+      applyPolicy(sessionChainStore, record, handoffPolicy);
 
-      // A concurrently visible legacy shell hook fires without the header on
-      // the same still-valid durable principal → must be fenced before count.
-      const legacySeal = await app.inject({
+      const legacyFirst = await app.inject({
         method: 'POST',
         url: '/api/sessions/seal',
         headers: authHeaders(),
-        payload: { cliSessionId: 'cli-parallel', reason: 'claude-code-compact-auto' },
+        payload: { cliSessionId: 'cli-parallel-legacy-first', reason: 'claude-code-compact-auto' },
       });
-      assert.notEqual(legacySeal.statusCode, 200, 'the legacy handler must not mint a second observation');
+      assert.equal(legacyFirst.statusCode, 403);
+      assert.equal(JSON.parse(legacyFirst.payload).error, 'compaction_carrier_identity_mismatch');
+
+      const nodeSecond = await app.inject({
+        method: 'POST',
+        url: '/api/sessions/seal',
+        headers: { ...authHeaders(), 'x-clowder-compaction-carrier': 'f296-node-v1' },
+        payload: { cliSessionId: 'cli-parallel-legacy-first', reason: 'claude-code-compact-auto' },
+      });
+      assert.equal(nodeSecond.statusCode, 200);
+
+      const after = sessionChainStore.get(record.id);
+      assert.equal(after.compressionObservation?.sequence, 1, 'arrival order cannot change the exactly-once outcome');
     });
 
     it('a legacy shell callback stays rejected after simulated state loss because the binding is durable on the principal', async () => {
