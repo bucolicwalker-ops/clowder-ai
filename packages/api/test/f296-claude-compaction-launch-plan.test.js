@@ -106,6 +106,41 @@ describe('F296 #1542 claude compaction launch plan', () => {
     assert.equal(buildClaudeCompactionLaunchPlan({ installRoot: './no-such-root' }).ready, false);
   });
 
+  test('an install root reached through a directory link resolves by real identity (#1542 final P1)', () => {
+    // Root-level junction (Windows) / symlink (POSIX) to the install root:
+    // the alias path must canonicalize to the real root and resolve the
+    // carrier by real identity — the layout desktop installs use when the
+    // app root is reached through a junction.
+    const realRoot = carrierRoot();
+    const aliasParent = emptyRoot();
+    const alias = join(aliasParent, 'alias-to-install');
+    symlinkSync(realRoot, alias, process.platform === 'win32' ? 'junction' : 'dir');
+
+    const plan = buildClaudeCompactionLaunchPlan({ installRoot: alias });
+    assert.equal(plan.ready, true, 'a root-level link must resolve by real identity');
+    const canonicalRoot = realpathSync(realRoot);
+    assert.equal(plan.carrierScriptPath, join(canonicalRoot, '.claude', 'hooks', 'f24-compaction.mjs'));
+  });
+
+  test(
+    'a case-variant install-root spelling canonicalizes (#1542 final P1, Windows Apps/apps)',
+    { skip: process.platform !== 'win32' },
+    () => {
+      // Windows filesystems are case-insensitive: Apps/apps-style spellings of
+      // the same install root must canonicalize to the real filesystem casing
+      // before any containment or command derivation.
+      const root = carrierRoot();
+      const varied = root
+        .split(/[\\/]/)
+        .map((segment, index) => (index % 2 === 1 ? segment.toUpperCase() : segment))
+        .join('\\');
+      const plan = buildClaudeCompactionLaunchPlan({ installRoot: varied });
+      assert.equal(plan.ready, true, 'case-variant root spellings must canonicalize');
+      const canonicalRoot = realpathSync(root);
+      assert.equal(plan.carrierScriptPath, join(canonicalRoot, '.claude', 'hooks', 'f24-compaction.mjs'));
+    },
+  );
+
   test('an intermediate .claude/hooks directory link escape fails closed (#1542 delta P1)', () => {
     const sandbox = mkdtempSync(join(tmpdir(), 'f296-intermediate-escape-'));
     roots.push(sandbox);
