@@ -93,11 +93,32 @@ function resolveTrustedInstallRoot(): string | undefined {
   return undefined;
 }
 
+/**
+ * #1542 delta P1: explicit/env roots are canonicalized — resolved to an
+ * absolute coordinate and realpath'd — before use. A relative root would
+ * otherwise produce a relative carrier command that the claude child resolves
+ * against ITS working directory, not the API process that judged readiness.
+ * A root that does not exist fails closed (realpath throws).
+ */
+function canonicalizeRoot(root: string): string | undefined {
+  try {
+    return realpathSync(resolve(root));
+  } catch {
+    return undefined;
+  }
+}
+
 function resolveInstallRoot(explicit?: string): string | undefined {
-  if (explicit) return explicit;
+  if (explicit) return canonicalizeRoot(explicit);
   const envRoot = process.env.CAT_CAFE_COMPACTION_CARRIER_ROOT?.trim();
-  if (envRoot) return envRoot;
+  if (envRoot) return canonicalizeRoot(envRoot);
   return resolveTrustedInstallRoot();
+}
+
+/** True when path is the canonical root itself or a descendant of it. */
+function isInsideRoot(path: string, canonicalRoot: string): boolean {
+  const prefix = canonicalRoot.endsWith('/') ? canonicalRoot : `${canonicalRoot}/`;
+  return path === canonicalRoot || path.startsWith(prefix);
 }
 
 function isRecordLike(value: unknown): value is Record<string, unknown> {
@@ -191,12 +212,21 @@ export function buildClaudeCompactionLaunchPlan(
 ): ClaudeCompactionLaunchPlanResult {
   const installRoot = resolveInstallRoot(options.installRoot);
   if (!installRoot) return { ready: false, reason: 'carrier_script_unresolved' };
-  const carrierScriptPath = resolveCarrierScriptPath(installRoot);
+  const joinedCarrierPath = resolveCarrierScriptPath(installRoot);
+  let carrierScriptPath: string;
   let source: string;
   try {
-    const stat = lstatSync(carrierScriptPath);
+    const stat = lstatSync(joinedCarrierPath);
     // Plain file only — the canonical carrier is packaged, not linked.
     if (!stat.isFile() || stat.isSymbolicLink()) return { ready: false, reason: 'carrier_script_unresolved' };
+    // #1542 delta P1: intermediate `.claude`/`hooks` components may be links;
+    // the RESOLVED carrier must remain a descendant of the canonical root, or
+    // an install-boundary escape executes outside code with callback
+    // credentials. The realpath is the coordinate handed to the CLI.
+    carrierScriptPath = realpathSync(joinedCarrierPath);
+    if (!isInsideRoot(carrierScriptPath, installRoot)) {
+      return { ready: false, reason: 'carrier_script_unresolved' };
+    }
     source = readFileSync(carrierScriptPath, 'utf8');
   } catch {
     // Absent asset under the trusted root — fail closed, never escape upward.

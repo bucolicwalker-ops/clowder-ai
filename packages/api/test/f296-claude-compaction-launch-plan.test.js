@@ -1,8 +1,8 @@
 import './helpers/setup-cat-registry.js';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, relative as relativePath } from 'node:path';
 import { afterEach, describe, test } from 'node:test';
 
 const { buildClaudeCompactionLaunchPlan, composeManagedSettingsDocument, CLAUDE_COMPACTION_CARRIER_IDENTITY } =
@@ -64,12 +64,14 @@ describe('F296 #1542 claude compaction launch plan', () => {
     assert.ok(plan.planIdentity.length > 0);
   });
 
-  test('CAT_CAFE_COMPACTION_CARRIER_ROOT overrides the install root', () => {
+  test('CAT_CAFE_COMPACTION_CARRIER_ROOT overrides the install root (canonicalized)', () => {
     const root = carrierRoot();
     process.env.CAT_CAFE_COMPACTION_CARRIER_ROOT = root;
     const plan = buildClaudeCompactionLaunchPlan();
     assert.equal(plan.ready, true);
-    assert.equal(plan.carrierScriptPath, join(root, '.claude', 'hooks', 'f24-compaction.mjs'));
+    // macOS /var → /private/var: the coordinate is the REALPATH of the root.
+    const canonicalRoot = realpathSync(root);
+    assert.equal(plan.carrierScriptPath, join(canonicalRoot, '.claude', 'hooks', 'f24-compaction.mjs'));
   });
 
   test('fails closed on missing, marker-less, or symlinked carrier assets', () => {
@@ -85,6 +87,43 @@ describe('F296 #1542 claude compaction launch plan', () => {
       buildClaudeCompactionLaunchPlan({ installRoot: carrierRoot({ linked: true }) }).reason,
       'carrier_script_unresolved',
     );
+  });
+
+  test('a relative explicit/env root is canonicalized to an absolute coordinate (#1542 delta P1)', () => {
+    const root = carrierRoot();
+    const relative = relativePath(process.cwd(), root);
+    const plan = buildClaudeCompactionLaunchPlan({ installRoot: relative });
+    assert.equal(plan.ready, true);
+    assert.ok(isAbsolute(plan.carrierScriptPath), 'the carrier coordinate must be absolute');
+    assert.ok(plan.preCompactCommand.includes(`"${plan.carrierScriptPath}" pre`));
+
+    // A root that does not exist fails closed (realpath throws).
+    assert.equal(buildClaudeCompactionLaunchPlan({ installRoot: './no-such-root' }).ready, false);
+  });
+
+  test('an intermediate .claude/hooks directory link escape fails closed (#1542 delta P1)', () => {
+    const sandbox = mkdtempSync(join(tmpdir(), 'f296-intermediate-escape-'));
+    roots.push(sandbox);
+    const install = join(sandbox, 'install');
+    const outside = join(sandbox, 'outside');
+    mkdirSync(join(install, 'packages', 'api'), { recursive: true });
+    mkdirSync(join(outside, 'hooks'), { recursive: true });
+    writeFileSync(
+      join(outside, 'hooks', 'f24-compaction.mjs'),
+      [
+        '// carrier outside the trusted install',
+        'fetch("/api/sessions/seal"',
+        'CAT_CAFE_INVOCATION_ID CAT_CAFE_CALLBACK_TOKEN',
+        'X-Invocation-Id X-Callback-Token X-Clowder-Compaction-Carrier',
+      ].join('\n'),
+    );
+    // <install>/.claude is a symlink to <outside>: the joined path looks inside
+    // the install, but its realpath resolves outside — must fail closed.
+    mkdirSync(install, { recursive: true });
+    symlinkSync(outside, join(install, '.claude'));
+
+    const plan = buildClaudeCompactionLaunchPlan({ installRoot: install });
+    assert.equal(plan.ready, false, 'an intermediate-component escape must not produce a ready plan');
   });
 
   test('a missing carrier under the trusted root fails closed — no ancestor escape (#1542 delta P1-A)', () => {
