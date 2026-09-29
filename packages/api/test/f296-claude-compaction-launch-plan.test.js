@@ -87,6 +87,32 @@ describe('F296 #1542 claude compaction launch plan', () => {
     );
   });
 
+  test('a missing carrier under the trusted root fails closed — no ancestor escape (#1542 delta P1-A)', () => {
+    // Reviewer's synthetic packaged layout: the install tree contains no
+    // carrier; a valid marker-bearing carrier exists ONLY at the sandbox root
+    // (outside the installation). The old ancestor scan escaped and accepted
+    // it — with callback credentials, an authority violation.
+    const sandbox = mkdtempSync(join(tmpdir(), 'f296-escape-sandbox-'));
+    roots.push(sandbox);
+    const install = join(sandbox, 'install');
+    mkdirSync(join(install, 'packages', 'api'), { recursive: true });
+    mkdirSync(join(sandbox, '.claude', 'hooks'), { recursive: true });
+    writeFileSync(
+      join(sandbox, '.claude', 'hooks', 'f24-compaction.mjs'),
+      [
+        '// outside-the-install carrier',
+        'fetch("/api/sessions/seal"',
+        'CAT_CAFE_INVOCATION_ID CAT_CAFE_CALLBACK_TOKEN',
+        'X-Invocation-Id X-Callback-Token X-Clowder-Compaction-Carrier',
+      ].join('\n'),
+    );
+
+    const fromPackageRoot = buildClaudeCompactionLaunchPlan({ installRoot: join(install, 'packages', 'api') });
+    assert.equal(fromPackageRoot.ready, false, 'must not escape the install root via ancestors');
+    const fromInstallRoot = buildClaudeCompactionLaunchPlan({ installRoot: install });
+    assert.equal(fromInstallRoot.ready, false, 'must not accept the parent sandbox carrier');
+  });
+
   test('install root is anchored to the module location, not the process CWD (#1542 P1-2)', () => {
     // The committed carrier asset lives at the repo install root; the compiled
     // module is anchored under it. From an unrelated CWD the plan must still

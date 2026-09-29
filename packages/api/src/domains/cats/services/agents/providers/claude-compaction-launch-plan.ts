@@ -18,7 +18,7 @@
  *   cannot substitute for the current-invocation authenticated attestation.
  */
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -59,35 +59,45 @@ export interface ClaudeCompactionLaunchPlanOptions {
 }
 
 /**
- * Trusted install-root anchor (#1542 review P1-2): derive candidate roots from
- * THIS MODULE's own location, never from process.cwd(). The packaged API may be
- * launched from any directory (Windows Apps/apps spellings, junctions, service
- * managers); the compiled module always lives at a fixed depth under the
- * install root, so walking up from `import.meta.url` establishes the promised
- * install-root authority boundary regardless of the process CWD.
+ * Trusted install-root anchor (#1542 P1-2 + delta P1-A): derive ONE exact
+ * install root from THIS MODULE's own location, never from process.cwd(), and
+ * never search ancestors of that root. The carrier script executes with
+ * invocation callback credentials, so a missing asset under the trusted root
+ * must yield ready:false — never a marker-bearing script picked up from
+ * outside the installation.
+ *
+ * Layout contract: the API package always lives at `<installRoot>/packages/api`
+ * (repo checkout, desktop {app}); the module sits at a fixed depth under the
+ * package. Walk up from the module to its package.json, validate the parent
+ * really contains this package at `packages/api` (realpath-normalized so
+ * Windows Apps/apps spellings and junctions compare by identity), then use
+ * exactly `<installRoot>/.claude/hooks/f24-compaction.mjs` as the asset
+ * coordinate. Explicit/env roots are trusted as-is and get the same single
+ * exact coordinate — no ancestor search anywhere.
  */
-function resolveInstallRootCandidates(): string[] {
+function resolveTrustedInstallRoot(): string | undefined {
   const moduleDir = dirname(fileURLToPath(import.meta.url));
-  // dist/domains/cats/services/agents/providers/ → walk up to the package root
-  // and the install root that contains it (repo checkout, desktop {app}, etc.).
-  return [
-    resolve(moduleDir, '.'), // packages/api/dist/.../providers (dev transpile layouts)
-    resolve(moduleDir, '../../../..'), // package root
-    resolve(moduleDir, '../../../../../..'), // install root containing the package
-  ];
+  let dir = moduleDir;
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (existsSync(join(dir, 'package.json'))) {
+      // packageRoot = <installRoot>/packages/api → installRoot is two levels up.
+      const packageRoot = realpathSync(dir);
+      const packagesDir = dirname(packageRoot);
+      const installRoot = realpathSync(dirname(packagesDir));
+      return realpathSync(join(installRoot, 'packages', 'api')) === packageRoot ? installRoot : undefined;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return undefined;
+    dir = parent;
+  }
+  return undefined;
 }
 
-function resolveInstallRoot(explicit?: string): string {
+function resolveInstallRoot(explicit?: string): string | undefined {
   if (explicit) return explicit;
   const envRoot = process.env.CAT_CAFE_COMPACTION_CARRIER_ROOT?.trim();
   if (envRoot) return envRoot;
-  for (const candidate of resolveInstallRootCandidates()) {
-    if (existsSync(join(candidate, '.claude', 'hooks', CARRIER_SCRIPT_NAME))) return candidate;
-  }
-  // Fall back to the nearest package-level ancestor; buildClaudeCompactionLaunchPlan
-  // still scans its upward candidates, so an unmatched root yields a ready:false
-  // plan rather than a wrong-file match.
-  return resolve(dirname(fileURLToPath(import.meta.url)), '../../../../../..');
+  return resolveTrustedInstallRoot();
 }
 
 function isRecordLike(value: unknown): value is Record<string, unknown> {
@@ -165,74 +175,70 @@ function resolveUserSettingsPath(userSettings: string, workingDirectory?: string
   return resolve(workingDirectory ?? process.cwd(), userSettings);
 }
 
-function resolveCarrierScriptCandidates(installRoot: string): string[] {
-  return [
-    resolve(installRoot, '.claude/hooks', CARRIER_SCRIPT_NAME),
-    resolve(installRoot, '../.claude/hooks', CARRIER_SCRIPT_NAME),
-    resolve(installRoot, '../../.claude/hooks', CARRIER_SCRIPT_NAME),
-    resolve(installRoot, '../../../.claude/hooks', CARRIER_SCRIPT_NAME),
-  ];
+function resolveCarrierScriptPath(installRoot: string): string {
+  // Single exact coordinate under the trusted install root — no ancestors.
+  return join(installRoot, '.claude', 'hooks', CARRIER_SCRIPT_NAME);
 }
 
 /**
  * Build the launch plan for one managed Claude spawn. Pure: touches no temp
  * files and reads no project settings, so readiness may build it freely.
+ * Resolves exactly ONE asset coordinate under the trusted install root —
+ * absence or staleness fails closed, never an ancestor escape.
  */
 export function buildClaudeCompactionLaunchPlan(
   options: ClaudeCompactionLaunchPlanOptions = {},
 ): ClaudeCompactionLaunchPlanResult {
   const installRoot = resolveInstallRoot(options.installRoot);
-  let sawInvalidScript = false;
-  for (const carrierScriptPath of resolveCarrierScriptCandidates(installRoot)) {
-    let source: string;
-    try {
-      const stat = lstatSync(carrierScriptPath);
-      // Plain file only — the canonical carrier is packaged, not linked.
-      if (!stat.isFile() || stat.isSymbolicLink()) continue;
-      source = readFileSync(carrierScriptPath, 'utf8');
-    } catch {
-      continue;
-    }
-    if (!REQUIRED_NODE_CARRIER_MARKERS.every((marker) => source.includes(marker))) {
-      sawInvalidScript = true;
-      continue;
-    }
-    const nodePath = process.execPath;
-    const preCompactCommand = `"${nodePath}" "${carrierScriptPath}" pre`;
-    const sessionStartCommand = `"${nodePath}" "${carrierScriptPath}" post`;
-    const partialPlan: Omit<ClaudeCompactionLaunchPlan, 'settingsDocument' | 'planIdentity'> = {
-      ready: true,
-      nodePath,
-      carrierScriptPath,
-      carrierIdentity: CLAUDE_COMPACTION_CARRIER_IDENTITY,
-      preCompactCommand,
-      sessionStartCommand,
-    };
-    const settingsDocument = `${JSON.stringify(
-      {
-        hooks: {
-          PreCompact: [managedPreCompactHookEntry(partialPlan)],
-          SessionStart: [managedSessionStartHookEntry(partialPlan)],
-        },
-      },
-      null,
-      2,
-    )}\n`;
-    const sourceDigest = createHash('sha256').update(source).digest('hex');
-    const planIdentity = createHash('sha256')
-      .update(`${nodePath}|${carrierScriptPath}|${sourceDigest}`)
-      .digest('hex')
-      .slice(0, 16);
-    return {
-      ready: true,
-      nodePath,
-      carrierScriptPath,
-      carrierIdentity: CLAUDE_COMPACTION_CARRIER_IDENTITY,
-      preCompactCommand,
-      sessionStartCommand,
-      settingsDocument,
-      planIdentity,
-    };
+  if (!installRoot) return { ready: false, reason: 'carrier_script_unresolved' };
+  const carrierScriptPath = resolveCarrierScriptPath(installRoot);
+  let source: string;
+  try {
+    const stat = lstatSync(carrierScriptPath);
+    // Plain file only — the canonical carrier is packaged, not linked.
+    if (!stat.isFile() || stat.isSymbolicLink()) return { ready: false, reason: 'carrier_script_unresolved' };
+    source = readFileSync(carrierScriptPath, 'utf8');
+  } catch {
+    // Absent asset under the trusted root — fail closed, never escape upward.
+    return { ready: false, reason: 'carrier_script_unresolved' };
   }
-  return { ready: false, reason: sawInvalidScript ? 'carrier_script_invalid' : 'carrier_script_unresolved' };
+  if (!REQUIRED_NODE_CARRIER_MARKERS.every((marker) => source.includes(marker))) {
+    return { ready: false, reason: 'carrier_script_invalid' };
+  }
+  const nodePath = process.execPath;
+  const preCompactCommand = `"${nodePath}" "${carrierScriptPath}" pre`;
+  const sessionStartCommand = `"${nodePath}" "${carrierScriptPath}" post`;
+  const partialPlan: Omit<ClaudeCompactionLaunchPlan, 'settingsDocument' | 'planIdentity'> = {
+    ready: true,
+    nodePath,
+    carrierScriptPath,
+    carrierIdentity: CLAUDE_COMPACTION_CARRIER_IDENTITY,
+    preCompactCommand,
+    sessionStartCommand,
+  };
+  const settingsDocument = `${JSON.stringify(
+    {
+      hooks: {
+        PreCompact: [managedPreCompactHookEntry(partialPlan)],
+        SessionStart: [managedSessionStartHookEntry(partialPlan)],
+      },
+    },
+    null,
+    2,
+  )}\n`;
+  const sourceDigest = createHash('sha256').update(source).digest('hex');
+  const planIdentity = createHash('sha256')
+    .update(`${nodePath}|${carrierScriptPath}|${sourceDigest}`)
+    .digest('hex')
+    .slice(0, 16);
+  return {
+    ready: true,
+    nodePath,
+    carrierScriptPath,
+    carrierIdentity: CLAUDE_COMPACTION_CARRIER_IDENTITY,
+    preCompactCommand,
+    sessionStartCommand,
+    settingsDocument,
+    planIdentity,
+  };
 }
