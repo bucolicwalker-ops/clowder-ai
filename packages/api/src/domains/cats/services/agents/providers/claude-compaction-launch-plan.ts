@@ -81,10 +81,10 @@ function resolveTrustedInstallRoot(): string | undefined {
   for (let depth = 0; depth < 8; depth += 1) {
     if (existsSync(join(dir, 'package.json'))) {
       // packageRoot = <installRoot>/packages/api → installRoot is two levels up.
-      const packageRoot = realpathSync(dir);
+      const packageRoot = realpathSync.native(dir);
       const packagesDir = dirname(packageRoot);
-      const installRoot = realpathSync(dirname(packagesDir));
-      return realpathSync(join(installRoot, 'packages', 'api')) === packageRoot ? installRoot : undefined;
+      const installRoot = realpathSync.native(dirname(packagesDir));
+      return realpathSync.native(join(installRoot, 'packages', 'api')) === packageRoot ? installRoot : undefined;
     }
     const parent = dirname(dir);
     if (parent === dir) return undefined;
@@ -102,7 +102,7 @@ function resolveTrustedInstallRoot(): string | undefined {
  */
 function canonicalizeRoot(root: string): string | undefined {
   try {
-    return realpathSync(resolve(root));
+    return realpathSync.native(resolve(root));
   } catch {
     return undefined;
   }
@@ -230,7 +230,7 @@ export function buildClaudeCompactionLaunchPlan(
     // the RESOLVED carrier must remain a descendant of the canonical root, or
     // an install-boundary escape executes outside code with callback
     // credentials. The realpath is the coordinate handed to the CLI.
-    carrierScriptPath = realpathSync(joinedCarrierPath);
+    carrierScriptPath = realpathSync.native(joinedCarrierPath);
     if (!isInsideRoot(carrierScriptPath, installRoot)) {
       return { ready: false, reason: 'carrier_script_unresolved' };
     }

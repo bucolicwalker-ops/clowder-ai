@@ -70,7 +70,7 @@ describe('F296 #1542 claude compaction launch plan', () => {
     const plan = buildClaudeCompactionLaunchPlan();
     assert.equal(plan.ready, true);
     // macOS /var → /private/var: the coordinate is the REALPATH of the root.
-    const canonicalRoot = realpathSync(root);
+    const canonicalRoot = realpathSync.native(root);
     assert.equal(plan.carrierScriptPath, join(canonicalRoot, '.claude', 'hooks', 'f24-compaction.mjs'));
   });
 
@@ -118,7 +118,7 @@ describe('F296 #1542 claude compaction launch plan', () => {
 
     const plan = buildClaudeCompactionLaunchPlan({ installRoot: alias });
     assert.equal(plan.ready, true, 'a root-level link must resolve by real identity');
-    const canonicalRoot = realpathSync(realRoot);
+    const canonicalRoot = realpathSync.native(realRoot);
     assert.equal(plan.carrierScriptPath, join(canonicalRoot, '.claude', 'hooks', 'f24-compaction.mjs'));
   });
 
@@ -136,7 +136,7 @@ describe('F296 #1542 claude compaction launch plan', () => {
         .join('\\');
       const plan = buildClaudeCompactionLaunchPlan({ installRoot: varied });
       assert.equal(plan.ready, true, 'case-variant root spellings must canonicalize');
-      const canonicalRoot = realpathSync(root);
+      const canonicalRoot = realpathSync.native(root);
       assert.equal(plan.carrierScriptPath, join(canonicalRoot, '.claude', 'hooks', 'f24-compaction.mjs'));
     },
   );
