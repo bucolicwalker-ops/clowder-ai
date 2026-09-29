@@ -1291,6 +1291,7 @@ describe('Session Hooks Routes', () => {
         threadId: 'thread-1',
         catId: 'opus',
         userId: 'user-1',
+        compressionCount: 0,
       });
       applyPolicy(sessionChainStore, record, handoffPolicy);
       const sealRequest = (headers) =>
@@ -1323,6 +1324,7 @@ describe('Session Hooks Routes', () => {
         'exactly one logical observation — a second record would advance the sequence',
       );
       assert.equal(after.compressionObservation.invocationId, DEFAULT_CALLBACK_AUTH.invocationId);
+      assert.equal(after.compressionCount, 1, 'the lifetime counter advances exactly once');
     });
 
     it('legacy arriving BEFORE the Node carrier is still fenced at the identity boundary (#1542 P1-5)', async () => {
@@ -1332,6 +1334,7 @@ describe('Session Hooks Routes', () => {
         threadId: 'thread-1',
         catId: 'opus',
         userId: 'user-1',
+        compressionCount: 0,
       });
       applyPolicy(sessionChainStore, record, handoffPolicy);
 
