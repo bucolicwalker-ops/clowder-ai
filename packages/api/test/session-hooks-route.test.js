@@ -1357,6 +1357,7 @@ describe('Session Hooks Routes', () => {
 
       const after = sessionChainStore.get(record.id);
       assert.equal(after.compressionObservation?.sequence, 1, 'arrival order cannot change the exactly-once outcome');
+      assert.equal(after.compressionCount, 1, 'the lifetime counter advances exactly once');
     });
 
     it('a legacy shell callback stays rejected after simulated state loss because the binding is durable on the principal', async () => {
