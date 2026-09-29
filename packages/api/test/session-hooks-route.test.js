@@ -1284,6 +1284,36 @@ describe('Session Hooks Routes', () => {
       assert.equal(JSON.parse(res.payload).status, 'sealing');
     });
 
+    it('Node + legacy firing in parallel produce exactly one logical observation (#1542 P1-5)', async () => {
+      const { app, sessionChainStore } = await setup({ expectedCarrier: 'f296-node-v1' });
+      const record = sessionChainStore.create({
+        cliSessionId: 'cli-parallel',
+        threadId: 'thread-1',
+        catId: 'opus',
+        userId: 'user-1',
+      });
+      applyPolicy(sessionChainStore, record, handoffPolicy);
+
+      // Canonical Node carrier fires with its typed identity → records once.
+      const nodeSeal = await app.inject({
+        method: 'POST',
+        url: '/api/sessions/seal',
+        headers: { ...authHeaders(), 'x-clowder-compaction-carrier': 'f296-node-v1' },
+        payload: { cliSessionId: 'cli-parallel', reason: 'claude-code-compact-auto' },
+      });
+      assert.equal(nodeSeal.statusCode, 200);
+
+      // A concurrently visible legacy shell hook fires without the header on
+      // the same still-valid durable principal → must be fenced before count.
+      const legacySeal = await app.inject({
+        method: 'POST',
+        url: '/api/sessions/seal',
+        headers: authHeaders(),
+        payload: { cliSessionId: 'cli-parallel', reason: 'claude-code-compact-auto' },
+      });
+      assert.notEqual(legacySeal.statusCode, 200, 'the legacy handler must not mint a second observation');
+    });
+
     it('a legacy shell callback stays rejected after simulated state loss because the binding is durable on the principal', async () => {
       // #1542 P1-1 regression: the expectation lives on the verified callback
       // record, not process-local state — a "restart" cannot drop it.
