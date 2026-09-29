@@ -51,7 +51,7 @@ describe('F296 #1542 claude compaction launch plan', () => {
     assert.equal(plan.carrierIdentity, CLAUDE_COMPACTION_CARRIER_IDENTITY);
     assert.equal(plan.nodePath, process.execPath);
     assert.ok(plan.carrierScriptPath.endsWith('f24-compaction.mjs'));
-    assert.ok(plan.carrierScriptPath.startsWith('/'), 'carrier script must be an absolute install-root path');
+    assert.ok(isAbsolute(plan.carrierScriptPath), 'carrier script must be an absolute install-root path');
     assert.equal(plan.preCompactCommand, `"${plan.nodePath}" "${plan.carrierScriptPath}" pre`);
     assert.equal(plan.sessionStartCommand, `"${plan.nodePath}" "${plan.carrierScriptPath}" post`);
 
