@@ -74,7 +74,7 @@ describe('F296 #1542 claude compaction launch plan', () => {
     assert.equal(plan.carrierScriptPath, join(canonicalRoot, '.claude', 'hooks', 'f24-compaction.mjs'));
   });
 
-  test('fails closed on missing, marker-less, or symlinked carrier assets', () => {
+  test('fails closed on missing or marker-less carrier assets', () => {
     assert.deepEqual(buildClaudeCompactionLaunchPlan({ installRoot: emptyRoot() }), {
       ready: false,
       reason: 'carrier_script_unresolved',
@@ -83,6 +83,11 @@ describe('F296 #1542 claude compaction launch plan', () => {
       buildClaudeCompactionLaunchPlan({ installRoot: carrierRoot({ valid: false }) }).reason,
       'carrier_script_invalid',
     );
+  });
+
+  test('fails closed on a final-component symlinked carrier', { skip: process.platform === 'win32' }, () => {
+    // File symlinks need elevated privileges on Windows; the equivalent
+    // directory-junction escape runs in the intermediate-escape test below.
     assert.equal(
       buildClaudeCompactionLaunchPlan({ installRoot: carrierRoot({ linked: true }) }).reason,
       'carrier_script_unresolved',
@@ -117,10 +122,11 @@ describe('F296 #1542 claude compaction launch plan', () => {
         'X-Invocation-Id X-Callback-Token X-Clowder-Compaction-Carrier',
       ].join('\n'),
     );
-    // <install>/.claude is a symlink to <outside>: the joined path looks inside
+    // <install>/.claude is a link to <outside>: the joined path looks inside
     // the install, but its realpath resolves outside — must fail closed.
+    // Directory junctions need no elevation on Windows; symlinks elsewhere.
     mkdirSync(install, { recursive: true });
-    symlinkSync(outside, join(install, '.claude'));
+    symlinkSync(outside, join(install, '.claude'), process.platform === 'win32' ? 'junction' : 'dir');
 
     const plan = buildClaudeCompactionLaunchPlan({ installRoot: install });
     assert.equal(plan.ready, false, 'an intermediate-component escape must not produce a ready plan');

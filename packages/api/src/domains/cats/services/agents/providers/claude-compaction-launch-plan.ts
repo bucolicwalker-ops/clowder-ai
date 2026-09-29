@@ -19,7 +19,7 @@
  */
 import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const CLAUDE_COMPACTION_CARRIER_IDENTITY = 'f296-node-v1';
@@ -115,10 +115,17 @@ function resolveInstallRoot(explicit?: string): string | undefined {
   return resolveTrustedInstallRoot();
 }
 
-/** True when path is the canonical root itself or a descendant of it. */
+/**
+ * True when path is the canonical root itself or a descendant of it.
+ * #1542 delta review: platform-aware via path.relative — a hard-coded '/'
+ * prefix rejected every legitimate Windows carrier path (backslash realpaths),
+ * and the Windows Smoke job did not run this suite to catch it.
+ */
 function isInsideRoot(path: string, canonicalRoot: string): boolean {
-  const prefix = canonicalRoot.endsWith('/') ? canonicalRoot : `${canonicalRoot}/`;
-  return path === canonicalRoot || path.startsWith(prefix);
+  const rel = relative(canonicalRoot, path);
+  if (rel === '') return true;
+  if (isAbsolute(rel)) return false;
+  return rel !== '..' && !rel.startsWith(`..${sep}`);
 }
 
 function isRecordLike(value: unknown): value is Record<string, unknown> {

@@ -49,6 +49,13 @@ jobs:
           node --test packages/api/test/cli-spawn-win.test.js
           node --test packages/api/test/process-liveness-probe.test.js
           node --test packages/api/test/pick-directory.test.js
+      # #1542: the compaction launch plan must hold on Windows (realpath
+      # backslash semantics, junction escapes, canonical containment).
+      - name: F296 compaction launch plan (Windows paths)
+        run: >-
+          node --test
+          packages/api/test/f296-claude-compaction-launch-plan.test.js
+          packages/api/test/f296-invocation-carrier-identity.test.js
       - name: ManagedRunner Windows process-tree cleanup
         run: >-
           node --test
