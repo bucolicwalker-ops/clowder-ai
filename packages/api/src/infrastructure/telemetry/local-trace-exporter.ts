@@ -41,11 +41,13 @@ function spanToDTO(span: ReadableSpan): TraceSpanDTO {
       ...(span.status.message ? { message: span.status.message } : {}),
     },
     attributes: { ...span.attributes },
-    events: span.events.map((e) => ({
-      name: e.name,
-      timeMs: hrTimeToMs(e.time),
-      ...(e.attributes && Object.keys(e.attributes).length > 0 ? { attributes: { ...e.attributes } } : {}),
-    })),
+    events: span.events.map(
+      (e: { name: string; time: [number, number]; attributes?: Record<string, unknown> }) => ({
+        name: e.name,
+        timeMs: hrTimeToMs(e.time),
+        ...(e.attributes && Object.keys(e.attributes).length > 0 ? { attributes: { ...e.attributes } } : {}),
+      }),
+    ),
     storedAt: Date.now(),
   };
 }
