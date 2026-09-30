@@ -13,6 +13,7 @@ import {
   routingSignalClosures,
   routingSignalEventV1Schema,
 } from '@cat-cafe/shared';
+import type { CapabilityProfileDiagnostic } from './CapabilityProfileRevisionSource.js';
 
 export interface ReduceRoutingContextInput {
   ownerId: string;
@@ -21,6 +22,7 @@ export interface ReduceRoutingContextInput {
   intent?: 'review' | 'architecture';
   candidates: readonly RoutingCandidateBindingV1[];
   profiles: readonly CapabilityProfileRevisionRefV1[];
+  profileDiagnostics?: readonly CapabilityProfileDiagnostic[];
   signalEvents: readonly RoutingSignalEventV1[];
   preferenceRevisions: readonly RoutingPreferenceRevisionV1[];
 }
@@ -291,17 +293,25 @@ export function reduceRoutingContext(rawInput: ReduceRoutingContextInput): Routi
       .filter((preference) => preference.ownerId === rawInput.ownerId),
   );
   const profileHeads = selectProfileHeads(profiles);
+  const profileDiagnostics = rawInput.profileDiagnostics ?? [];
   const closures = routingSignalClosures(signalEvents);
 
   const projectedCandidates: CandidateProjection[] = candidates
     .map((binding) => {
       const profile = profileHeads.get(binding.catId);
+      const diagnostics = profileDiagnostics
+        .filter((diagnostic) => diagnostic.catId === binding.catId)
+        .map((diagnostic) => diagnostic.reason);
       const signalState = reduceCandidateSignals({
         candidate: binding,
         events: signalEvents,
         closures,
         observedAt: rawInput.observedAt,
       });
+      const capabilityReasons = profileReasons(profile);
+      const boundedDiagnostics = diagnostics.slice(0, 32);
+      const boundedCapabilityReasons = capabilityReasons.slice(0, 32 - boundedDiagnostics.length);
+      const signalReasonLimit = 32 - boundedDiagnostics.length - boundedCapabilityReasons.length;
       return {
         binding,
         profile:
@@ -309,7 +319,11 @@ export function reduceRoutingContext(rawInput: ReduceRoutingContextInput): Routi
         availability: signalState.availability,
         freshness: signalState.freshness,
         ...(signalState.dispatch ? { dispatch: signalState.dispatch } : {}),
-        reasons: [...signalState.reasons.slice(0, 32 - profileReasons(profile).length), ...profileReasons(profile)],
+        reasons: [
+          ...boundedDiagnostics,
+          ...signalState.reasons.slice(0, signalReasonLimit),
+          ...boundedCapabilityReasons,
+        ],
         matchedPreferences: [],
         effect: effectForAvailability(signalState.availability),
       };
