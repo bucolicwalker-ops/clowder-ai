@@ -18,19 +18,23 @@
  */
 import './helpers/setup-cat-registry.js';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { describe, test } from 'node:test';
+import { pathToFileURL } from 'node:url';
 
 const INSTALL_ROOT = process.env.CAT_CAFE_INSTALLED_LAYOUT_ROOT?.trim();
 const CARRIER_RELATIVE = join('.claude', 'hooks', 'f24-compaction.mjs');
 
 if (!INSTALL_ROOT) {
-  describe('F296 #1542 installed-layout acceptance', { skip: 'CAT_CAFE_INSTALLED_LAYOUT_ROOT not set (staged-install CI job only)' }, () => {
-    test('placeholder', () => {});
-  });
+  describe(
+    'F296 #1542 installed-layout acceptance',
+    { skip: 'CAT_CAFE_INSTALLED_LAYOUT_ROOT not set (staged-install CI job only)' },
+    () => {
+      test('placeholder', () => {});
+    },
+  );
 } else {
   const installRoot = realpathSync(INSTALL_ROOT);
   const apiDist = join(installRoot, 'packages', 'api', 'dist');
@@ -38,9 +42,7 @@ if (!INSTALL_ROOT) {
     pathToFileURL(join(apiDist, 'domains', 'cats', 'services', 'agents', 'providers', rel)).href;
 
   const { buildClaudeCompactionLaunchPlan } = await import(moduleUrl('claude-compaction-launch-plan.js'));
-  const { sessionHooksRoutes } = await import(
-    pathToFileURL(join(apiDist, 'routes', 'session-hooks.js')).href
-  );
+  const { sessionHooksRoutes } = await import(pathToFileURL(join(apiDist, 'routes', 'session-hooks.js')).href);
   const { SessionChainStore } = await import(
     pathToFileURL(join(apiDist, 'domains', 'cats', 'services', 'stores', 'ports', 'SessionChainStore.js')).href
   );
@@ -61,15 +63,19 @@ if (!INSTALL_ROOT) {
       assert.ok(plan.preCompactCommand.includes(`${plan.carrierScriptPath}" pre`));
     });
 
-    test('an Apps/apps case-variant spelling of the installed root canonicalizes', { skip: process.platform !== 'win32' }, () => {
-      const varied = installRoot
-        .split(/[\\/]/)
-        .map((segment, index) => (index % 2 === 1 ? segment.toUpperCase() : segment))
-        .join('\\');
-      const plan = buildClaudeCompactionLaunchPlan({ installRoot: varied });
-      assert.equal(plan.ready, true);
-      assert.equal(plan.carrierScriptPath, join(installRoot, CARRIER_RELATIVE));
-    });
+    test(
+      'an Apps/apps case-variant spelling of the installed root canonicalizes',
+      { skip: process.platform !== 'win32' },
+      () => {
+        const varied = installRoot
+          .split(/[\\/]/)
+          .map((segment, index) => (index % 2 === 1 ? segment.toUpperCase() : segment))
+          .join('\\');
+        const plan = buildClaudeCompactionLaunchPlan({ installRoot: varied });
+        assert.equal(plan.ready, true);
+        assert.equal(plan.carrierScriptPath, join(installRoot, CARRIER_RELATIVE));
+      },
+    );
 
     test('a root-level directory link (junction on Windows) resolves by real identity', () => {
       const aliasHome = mkdtempSync(join(tmpdir(), 'f296-install-alias-'));
@@ -181,11 +187,16 @@ if (!INSTALL_ROOT) {
       await app.close();
     });
 
-    test('identifies the artifact under test', () => {
-      // The CI job echoes the exact commit SHA alongside this suite; the
-      // install root path itself pins the staged artifact identity.
-      assert.ok(INSTALL_ROOT.length > 0);
-      assert.ok(join(apiDist, 'package.json') || true, 'dist tree present');
+    test('identifies the packaged artifact under test', () => {
+      // The CI job records the exact commit SHA alongside this suite; the
+      // packaged dist entry point must actually exist at the staged root.
+      assert.ok(existsSync(join(apiDist, 'routes', 'session-hooks.js')), 'packaged dist entry point exists');
+      assert.ok(existsSync(join(installRoot, CARRIER_RELATIVE)), 'packaged carrier asset exists');
+      assert.ok(existsSync(join(installRoot, 'packages', 'api', 'package.json')), 'packaged package manifest exists');
+      const recordedSha = process.env.GITHUB_SHA?.trim();
+      if (recordedSha) {
+        assert.match(recordedSha, /^[0-9a-f]{40}$/, 'CI records the exact commit SHA');
+      }
     });
   });
 }
