@@ -1991,3 +1991,131 @@ test('AC-G4 cloud P2: Claude result is_error:true surfaces tool_call_parse_faile
     'silent_completion MUST NOT fire when Claude result carries is_error:true',
   );
 });
+
+// ── #1579: --autocompact injection from contextNativeWindowTokens ─────────────
+
+test('#1579: injects --autocompact from contextNativeWindowTokens (pre-pin native window)', async () => {
+  const proc = createMockProcess();
+  const spawnFn = createMockSpawnFn(proc);
+  const service = createClaudeAgentService({ spawnFn, model: 'claude-test-model' });
+
+  const promise = collect(
+    service.invoke('hello', {
+      callbackEnv: {
+        CAT_CAFE_API_URL: 'http://localhost:3004',
+        CAT_CAFE_INVOCATION_ID: 'inv-ac',
+        CAT_CAFE_CALLBACK_TOKEN: 'tok-ac',
+        CAT_CAFE_ANTHROPIC_PROFILE_MODE: 'api_key',
+        CAT_CAFE_ANTHROPIC_API_KEY: 'sk-test',
+      },
+      contextNativeWindowTokens: 1_000_000,
+    }),
+  );
+  emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+  await promise;
+
+  const args = spawnFn.mock.calls[0].arguments[1];
+  const idx = args.indexOf('--autocompact');
+  assert.ok(idx >= 0, '--autocompact must be present when nativeWindowTokens is a positive number');
+  assert.equal(args[idx + 1], '1000000');
+});
+
+test('#1579: does NOT inject --autocompact when contextNativeWindowTokens is null (no config-owned window)', async () => {
+  const proc = createMockProcess();
+  const spawnFn = createMockSpawnFn(proc);
+  const service = createClaudeAgentService({ spawnFn, model: 'claude-test-model' });
+
+  const promise = collect(
+    service.invoke('hello', {
+      callbackEnv: {
+        CAT_CAFE_API_URL: 'http://localhost:3004',
+        CAT_CAFE_INVOCATION_ID: 'inv-ac-null',
+        CAT_CAFE_CALLBACK_TOKEN: 'tok-ac-null',
+        CAT_CAFE_ANTHROPIC_PROFILE_MODE: 'api_key',
+        CAT_CAFE_ANTHROPIC_API_KEY: 'sk-test',
+      },
+      contextNativeWindowTokens: null,
+    }),
+  );
+  emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+  await promise;
+
+  const args = spawnFn.mock.calls[0].arguments[1];
+  assert.ok(!args.includes('--autocompact'), 'must NOT inject --autocompact when nativeWindowTokens is null');
+});
+
+test('#1579: does NOT inject --autocompact when contextNativeWindowTokens is undefined (legacy caller)', async () => {
+  const proc = createMockProcess();
+  const spawnFn = createMockSpawnFn(proc);
+  const service = createClaudeAgentService({ spawnFn, model: 'claude-test-model' });
+
+  const promise = collect(
+    service.invoke('hello', {
+      callbackEnv: {
+        CAT_CAFE_API_URL: 'http://localhost:3004',
+        CAT_CAFE_INVOCATION_ID: 'inv-ac-legacy',
+        CAT_CAFE_CALLBACK_TOKEN: 'tok-ac-legacy',
+        CAT_CAFE_ANTHROPIC_PROFILE_MODE: 'api_key',
+        CAT_CAFE_ANTHROPIC_API_KEY: 'sk-test',
+      },
+      // contextNativeWindowTokens intentionally omitted (undefined)
+    }),
+  );
+  emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+  await promise;
+
+  const args = spawnFn.mock.calls[0].arguments[1];
+  assert.ok(!args.includes('--autocompact'), 'must NOT inject --autocompact for legacy callers without snapshot');
+});
+
+test('#1579: user-supplied --autocompact in cliConfigArgs overrides the managed value', async () => {
+  const proc = createMockProcess();
+  const spawnFn = createMockSpawnFn(proc);
+  const service = createClaudeAgentService({ spawnFn, model: 'claude-test-model' });
+
+  const promise = collect(
+    service.invoke('hello', {
+      callbackEnv: {
+        CAT_CAFE_API_URL: 'http://localhost:3004',
+        CAT_CAFE_INVOCATION_ID: 'inv-ac-user',
+        CAT_CAFE_CALLBACK_TOKEN: 'tok-ac-user',
+        CAT_CAFE_ANTHROPIC_PROFILE_MODE: 'api_key',
+        CAT_CAFE_ANTHROPIC_API_KEY: 'sk-test',
+      },
+      contextNativeWindowTokens: 1_000_000,
+      cliConfigArgs: ['--autocompact', '500000'],
+    }),
+  );
+  emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+  await promise;
+
+  const args = spawnFn.mock.calls[0].arguments[1];
+  const idx = args.indexOf('--autocompact');
+  assert.ok(idx >= 0, '--autocompact must be present');
+  assert.equal(args[idx + 1], '500000', 'user value wins over managed value');
+  assert.equal(args.filter((a) => a === '--autocompact').length, 1, 'exactly one --autocompact flag');
+});
+
+test('#1579: does NOT inject --autocompact when contextNativeWindowTokens is zero or negative', async () => {
+  const proc = createMockProcess();
+  const spawnFn = createMockSpawnFn(proc);
+  const service = createClaudeAgentService({ spawnFn, model: 'claude-test-model' });
+
+  const promise = collect(
+    service.invoke('hello', {
+      callbackEnv: {
+        CAT_CAFE_API_URL: 'http://localhost:3004',
+        CAT_CAFE_INVOCATION_ID: 'inv-ac-zero',
+        CAT_CAFE_CALLBACK_TOKEN: 'tok-ac-zero',
+        CAT_CAFE_ANTHROPIC_PROFILE_MODE: 'api_key',
+        CAT_CAFE_ANTHROPIC_API_KEY: 'sk-test',
+      },
+      contextNativeWindowTokens: 0,
+    }),
+  );
+  emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+  await promise;
+
+  const args = spawnFn.mock.calls[0].arguments[1];
+  assert.ok(!args.includes('--autocompact'), 'must NOT inject for zero/negative nativeWindowTokens');
+});

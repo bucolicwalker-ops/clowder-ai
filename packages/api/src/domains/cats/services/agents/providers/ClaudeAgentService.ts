@@ -436,12 +436,15 @@ export class ClaudeAgentService implements AgentService {
       // subscription mode: include user-level so CLI reads auth from ~/.claude/settings.json.
       '--setting-sources',
       isApiKeyMode ? 'project,local' : 'project,local,user',
-      // Auto-compact window: the CLI's `auto` mode uses ~130K for third-party
-      // 1M-context models (verified empirically), causing thrashing when MCP
-      // tool definitions alone consume ~156K tokens. Pass the cat's context
-      // budget so the full window is utilized.
-      '--autocompact',
-      String(options?.contextCapacity?.windowTokens ?? 800_000),
+      // #1579: auto-compact window. The CLI's `auto` mode uses ~130K for
+      // third-party 1M-context models (verified empirically), causing
+      // thrashing when MCP tool definitions alone consume ~120K tokens.
+      // Inject the #1381 contract-compliant native window (pre-pin, owned
+      // by member config); null/undefined means no config-owned window —
+      // do not inject and let the CLI use its default `auto` mode.
+      ...(typeof options?.contextNativeWindowTokens === 'number' && options.contextNativeWindowTokens > 0
+        ? ['--autocompact', String(options.contextNativeWindowTokens)]
+        : []),
       // Enable Chrome MCP integration (built-in, requires Chrome + extension running)
       ...(readOnly ? [] : ['--chrome']),
     ];
